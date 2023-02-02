@@ -159,7 +159,7 @@ Done:
 Syntax:
 
     if (argc)
-        printf ("\nSyntax: %s <JSON OTS template> <JSON OTS file> [-env=file]\n\n", argv[0]);
+        printf ("\nSyntax: %s <JSON OTS template> <JSON OTS file> [-env=file] [-prompt]\n\n", argv[0]);
     
     return 1;
 }
