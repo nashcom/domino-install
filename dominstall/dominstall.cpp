@@ -810,6 +810,7 @@ int InstallAddOn (int argc, const char *argv[])
     fprintf (g_fpLog, "InstallDir=%s\n", szInstallDir);
 
     CopyInstallDirectory (szInstallDir, "domino-bin", szProgramDir, 10);
+    CopyInstallDirectory (szInstallDir, "domino-data", szDataDir, 10);
 
     fprintf (g_fpLog, "FilesCopied=%ld\n",   g_CopiedFiles);
     fprintf (g_fpLog, "FileCopyErrors=%ld\n",g_CopyErrors);

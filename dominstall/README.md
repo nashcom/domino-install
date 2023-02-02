@@ -123,14 +123,20 @@ The main directories used are "domino-bin" and "domino-data".
 
 The following directory locations are supported for deployment:
 
-- domino-bin
-- domino-data
+| Directory   | Description |
+| :---------- | :---------- |
+|`domino-bin` | Domino binary directory |
+|`domino-data`| Domino Data directory |
 
-- domino-res
-- domino-osgi-dots
-- domino-jvm
-- domino-xsp
-- domino-osgi
+## Planed additional directories
+
+| Directory   | Description |
+| :---------- | :---------- |
+|`domino-res` (Linux only)| Domino string resources |
+|`domino-osgi-dots` | Domino DOTS tasks |
+|`domino-jvm` | JVM related files |
+|`domino-xsp` | XSP releated files |
+|`domino-osgi`| OSGI related files |
 
 
 # How to run
