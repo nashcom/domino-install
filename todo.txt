@@ -1,0 +1,19 @@
+NOTES_BUILD_ID=Release 12.0.2|November 03, 2022
+ServiceName=HCLDominoServer(enotesdata)
+
+
+curl -LO https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+vc_redist.x64.exe /quiet
+
+
+FILE*fp;
+if( fp = popen("/bin/tar -xv -C /target/dir", "w") )
+{
+    fwrite(tar_buffer,1,tar_size,fp);
+    pclose(fp);
+    printf("Untar End %d Save file\n", tar_size);
+
+}
+
+
