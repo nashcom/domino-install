@@ -1,3 +1,4 @@
+/*
 ###########################################################################
 # Domino Add-On Install                                                   #
 # Version 0.1 02.02.2023                                                  #
@@ -15,7 +16,7 @@
 # See the License for the specific language governing permissions and     #
 # limitations under the License.                                          #
 ###########################################################################
-
+*/
 
 #define ENV_DOMINO_BIN     "autoinstall_DominoBin"
 #define ENV_DOMINO_DATA    "autoinstall_DominoData"

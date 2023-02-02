@@ -1,3 +1,4 @@
+/*
 ###########################################################################
 # Domino Auto Config (OneTouchConfig Tool)                                #
 # Version 0.1 02.02.2023                                                  #
@@ -15,8 +16,7 @@
 # See the License for the specific language governing permissions and     #
 # limitations under the License.                                          #
 ###########################################################################
-
-
+*/
 
 /* autocfg: Replaces {{ placeholders }} in JSON files from environment variables or config file */
 
@@ -82,14 +82,14 @@ int GetParam (const char *pParam, const char *pName, char *retpConfig, int MaxPa
     return 1;
 }
 
-int main (int argc, char *argv[])
+int main (int argc, const char *argv[])
 {
     int ret    = 0;
     int i      = 0;
     int count  = 0;
     int prompt = 0;
 
-    char *pParam = NULL;
+    const char *pParam = NULL;
     char szTemplate[255] = {0};
     char szConfig[255]   = {0};
     char szEnvFile[255]  = {0};
@@ -109,7 +109,7 @@ int main (int argc, char *argv[])
                 continue;
             }
 
-            if (0 == strcmp (pParam, "-help") || (0 == strcmp (pParam, "-?"))
+            if (0 == strcmp (pParam, "-help") || (0 == strcmp (pParam, "-?")) )
             {
                 goto Syntax;
             }

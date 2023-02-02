@@ -1,3 +1,4 @@
+/*
 ###########################################################################
 # Domino Add-On Install                                                   #
 # Version 0.1 02.02.2023                                                  #
@@ -15,7 +16,7 @@
 # See the License for the specific language governing permissions and     #
 # limitations under the License.                                          #
 ###########################################################################
-
+*/
 
 #ifdef UNIX
 
@@ -31,7 +32,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "dominoinstall.h"
+#include "dominoinstall.hpp"
 
 typedef struct
 {

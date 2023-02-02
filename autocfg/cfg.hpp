@@ -1,3 +1,4 @@
+/*
 ###########################################################################
 # Domino Auto Config (OneTouchConfig Tool)                                #
 # Version 0.1 02.02.2023                                                  #
@@ -15,7 +16,7 @@
 # See the License for the specific language governing permissions and     #
 # limitations under the License.                                          #
 ###########################################################################
-
+*/
 
 #ifndef CFG_HPP
     #define CFG_HPP
