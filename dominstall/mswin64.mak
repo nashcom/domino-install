@@ -27,7 +27,7 @@ NODEBUG=1
 # Link command
 
 $(PROGRAM).exe: $(PROGRAM).obj
-	link /SUBSYSTEM:CONSOLE $(PROGRAM).obj msvcrt.lib Advapi32.lib /PDB:$*.pdb /DEBUG /PDBSTRIPPED:$*_small.pdb /NODEFAULTLIB:LIBCMT -out:$@
+	link /SUBSYSTEM:CONSOLE $(PROGRAM).obj msvcrt.lib  wintrust.lib Imagehlp.lib crypt32.lib Advapi32.lib /PDB:$*.pdb /DEBUG /PDBSTRIPPED:$*_small.pdb /NODEFAULTLIB:LIBCMT -out:$@
 	del $*.pdb $*.sym
 	rename $*_small.pdb $*.pdb
 

@@ -22,9 +22,16 @@
 
 #include <dirent.h>
 #include <sys/statvfs.h>
+
 #else
 
 #include <windows.h>
+#include <wincrypt.h>
+#include <tchar.h>
+#include <Softpub.h>
+#include <wintrust.h>
+#include <imagehlp.h>
+
 #endif
 
 #include <sys/stat.h>
@@ -33,6 +40,7 @@
 #include <string.h>
 
 #include "dominoinstall.hpp"
+
 
 typedef struct
 {
@@ -50,14 +58,17 @@ int  g_Debug  = 0;
 int  g_CopiedFiles = 0;
 int  g_CopyErrors = 0;
 
-char g_InstallRegDirName[] = ".install-reg";
+char g_InstallRegDirName[]  = ".install-reg";
+char g_InstallLogName[]     = "install.log";
+char g_InstallFileLogName[] = "file.log";
+char g_InstallIniName[]     = "install.ini";
+
 
 #ifdef UNIX
 char g_OsDirSep = '/';
 #else
 char g_OsDirSep = '\\';
 #endif
-
 
 void strdncpy (char *s, const char *ct, size_t n)
 {
@@ -73,44 +84,353 @@ void strdncpy (char *s, const char *ct, size_t n)
     }
 }
 
+int delete_file (const char *pszFileName)
+{
+    int ret = 0;
+
+    if (NULL == pszFileName)
+        goto Done;
+
+#ifdef UNIX
+#else
+    ret = DeleteFile (pszFileName);
+
+    if (g_fpLog)
+    {
+        if (0 == ret)
+            fprintf (g_fpLog, "Cannot delete file: %s\n", pszFileName);
+    }
+
+#endif
+
+Done:
+    return ret;
+}
 
 #ifdef UNIX
 #else
 
-    int NshGetRegValue (HKEY hMainKey, char *sub_key, char *value_name, char *data, DWORD data_size)
+void GetWindowsErrorString (const char *pszErrorMessage, int MaxRetBufferSize, char *retpszRetBuffer)
+{
+    DWORD dwWinError = 0;
+    DWORD dwRet = 0;
+    char  szWinErrorMessage[1024] = {0};
+    char  *p = NULL;
+
+    if ((NULL == retpszRetBuffer) || (0 == MaxRetBufferSize))
+        return;
+
+    *retpszRetBuffer = '\0';
+
+    if (NULL == pszErrorMessage)
+        return;
+
+    dwWinError = GetLastError();
+
+    if (dwWinError)
     {
-        HKEY    hKey;
-        DWORD   type;
-        LONG    ret;
-        DWORD   number;
-
-        ret = RegOpenKeyEx (HKEY_LOCAL_MACHINE, sub_key, 0, KEY_READ, &hKey);
-
-        if (ERROR_SUCCESS != ret) return 0;
-
-        ret = RegQueryValueExA (hKey, value_name, NULL, &type, (LPBYTE) data, &data_size);
-
-        RegCloseKey(hKey);
-
-        if (ERROR_SUCCESS != ret) return 0;
-
-        switch (type)
+        dwRet = FormatMessage (FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                               NULL,
+                               dwWinError,
+                               MAKELANGID (LANG_ENGLISH, SUBLANG_ENGLISH_US),
+                               szWinErrorMessage,
+                               sizeof (szWinErrorMessage)-1,
+                               NULL);
+        if (dwRet == 0)
         {
-            case REG_SZ:
-                break;
+            snprintf (retpszRetBuffer, sizeof (szWinErrorMessage)-1, "Win-Error: 0x%x", dwWinError);
+        }
+        else
+        {
+            /* Remove trailing new-line */
+            p=szWinErrorMessage;
 
-            case REG_DWORD:
-                number = (DWORD) (*data);
-                sprintf (data, "%ld", number);
-                break;
-
-            default:
-                *data = '\0';
-                break;
-        } /* switch */
-
-        return 1;
+            while (*p)
+            {
+                if (*p < 32)
+                {
+                    *p = '\0';
+                    break;
+                }
+                p++;
+            }
+        }
     }
+
+    snprintf (retpszRetBuffer, MaxRetBufferSize-1, "%s - %s", pszErrorMessage, szWinErrorMessage);
+}
+
+int GetEmbeddedSignature (const char *pszFileName, int MaxRetBufferSize, char *retpszRetBuffer)
+{
+    int ret = 2;
+    BOOL  fResult = FALSE;
+
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    DWORD  dwCertCount  = 0;
+    DWORD  dwCertLen    = 0;
+    DWORD  dwMemSize    = 0;
+    DWORD dwDecodeSize  = 0;
+    DWORD dwSubjectSize = 0;
+
+    CRYPT_VERIFY_MESSAGE_PARA VerifyMsgParam = { 0 };
+
+    WIN_CERTIFICATE CertHeader = {0};
+    WIN_CERTIFICATE *pCert = NULL;
+    PCCERT_CONTEXT  pCertContext = NULL;
+
+    WIN_CERTIFICATE *pCertBuf = NULL;
+
+    if ((NULL == retpszRetBuffer) || (0 == MaxRetBufferSize))
+        return ret;
+
+    *retpszRetBuffer = '\0';
+
+    if (NULL == pszFileName)
+        return ret;
+
+    hFile = CreateFile (pszFileName, FILE_READ_DATA, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, NULL);
+
+    if (INVALID_HANDLE_VALUE == hFile)
+    {
+        GetWindowsErrorString ("Cannot open file", MaxRetBufferSize, retpszRetBuffer);
+        goto Done;
+    }
+
+    if (!ImageEnumerateCertificates (hFile, CERT_SECTION_TYPE_ANY, &dwCertCount, NULL, 0))
+    {
+        GetWindowsErrorString ("Error enumerating certificates", MaxRetBufferSize, retpszRetBuffer);
+        goto Done;
+    }
+
+    printf ("Certificates found: %ld\n", dwCertCount);
+
+    CertHeader.dwLength = 0;
+    CertHeader.wRevision = WIN_CERT_REVISION_1_0;
+
+    if (!ImageGetCertificateHeader (hFile, 0, &CertHeader))
+    {
+        GetWindowsErrorString ("Error getting certificate header", MaxRetBufferSize, retpszRetBuffer);
+        goto Done;
+    }
+
+    dwCertLen = CertHeader.dwLength;
+    dwMemSize = sizeof (WIN_CERTIFICATE) + dwCertLen + 10; /* Paranoid extra space */
+
+    pCertBuf = (WIN_CERTIFICATE *) malloc (dwMemSize);
+
+    if (NULL == pCertBuf)
+    {
+        snprintf (retpszRetBuffer, MaxRetBufferSize-1, "Cannot allocate certificate buffer");
+        goto Done;
+    }
+
+    pCert = pCertBuf;
+    pCert->dwLength  = dwCertLen;
+    pCert->wRevision = WIN_CERT_REVISION_1_0;
+
+    if (!ImageGetCertificateData (hFile, 0, pCert, &dwCertLen))
+    {
+        GetWindowsErrorString ("Error getting certificate data", MaxRetBufferSize, retpszRetBuffer);
+        goto Done;
+    }
+
+    VerifyMsgParam.cbSize = sizeof (VerifyMsgParam);
+    VerifyMsgParam.dwMsgAndCertEncodingType = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
+
+    if (!CryptVerifyMessageSignature (&VerifyMsgParam, 0, pCert->bCertificate, pCert->dwLength, NULL, &dwDecodeSize, &pCertContext))
+    {
+        GetWindowsErrorString ("Error verifying signature", MaxRetBufferSize, retpszRetBuffer);
+        goto Done;
+    }
+
+    dwSubjectSize = CertGetNameString (pCertContext, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, NULL, NULL, 0);
+    if (dwSubjectSize <= 0)
+    {
+        GetWindowsErrorString ("Error getting certificate subject name", MaxRetBufferSize, retpszRetBuffer);
+        goto Done;
+    }
+
+    if (dwSubjectSize >= MaxRetBufferSize)
+    {
+        snprintf (retpszRetBuffer, MaxRetBufferSize-1, "Buffer too small for certificate name info");
+        goto Done;
+    }
+
+    CertGetNameString (pCertContext, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, NULL, retpszRetBuffer, MaxRetBufferSize-1);
+
+    ret = 0;
+
+Done:
+
+    if (pCertBuf)
+    {
+        free (pCertBuf);
+        pCertBuf = NULL;
+    }
+
+    if (INVALID_HANDLE_VALUE != hFile)
+    {
+        CloseHandle (hFile);
+        hFile = INVALID_HANDLE_VALUE;
+    }
+
+    return ret;
+}
+
+int VerifyEmbeddedSignature (const char *pszFileName, int MaxRetBufferSize, char *retpszRetBuffer)
+{
+    /* Return values:
+
+       0 = signature OK, buffer is empty
+       1 = not signed, buffer is empty
+       2 = error, buffer contains error
+    */
+
+    int ret= 2;
+    LONG lStatus;
+    DWORD dwLastError;
+
+    GUID WVTPolicyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+
+    wchar_t wszSourceFile[2048] = {0};
+    WINTRUST_DATA WinTrustData  = {0};
+    WINTRUST_FILE_INFO FileData = {0};
+
+    if ((NULL == retpszRetBuffer) || (0 == MaxRetBufferSize))
+        return ret;
+
+    *retpszRetBuffer = '\0';
+
+    if (NULL == pszFileName)
+        return ret;
+
+    swprintf (wszSourceFile, sizeof (wszSourceFile)-1, L"%hs", pszFileName);
+
+    FileData.cbStruct       = sizeof (WINTRUST_FILE_INFO);
+    FileData.pcwszFilePath  = wszSourceFile;
+    FileData.hFile          = NULL;
+    FileData.pgKnownSubject = NULL;
+
+    // Initialize the WinVerifyTrust input data structure.
+    WinTrustData.cbStruct = sizeof(WinTrustData);
+
+    // Use default code signing EKU.
+    WinTrustData.pPolicyCallbackData = NULL;
+
+    // No data to pass to SIP.
+    WinTrustData.pSIPClientData = NULL;
+
+    // Disable WVT UI.
+    WinTrustData.dwUIChoice = WTD_UI_NONE;
+
+    // No revocation checking.
+    WinTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN; // WTD_REVOKE_NONE;
+
+    // Verify an embedded signature on a file.
+    WinTrustData.dwUnionChoice = WTD_CHOICE_FILE;
+
+    // Verify action.
+    WinTrustData.dwStateAction = WTD_STATEACTION_VERIFY;
+
+    // Verification sets this value.
+    WinTrustData.hWVTStateData = NULL;
+
+    // Not used.
+    WinTrustData.pwszURLReference = NULL;
+    WinTrustData.dwUIContext = 0;
+
+    // Set pFile.
+    WinTrustData.pFile = &FileData;
+
+    lStatus = WinVerifyTrust (NULL, &WVTPolicyGUID, &WinTrustData);
+
+    switch (lStatus)
+    {
+        case ERROR_SUCCESS:
+            ret= 0;
+            break;
+
+        case TRUST_E_NOSIGNATURE:
+
+            dwLastError = GetLastError();
+
+            if ((TRUST_E_NOSIGNATURE == dwLastError) ||
+                (TRUST_E_SUBJECT_FORM_UNKNOWN == dwLastError) ||
+                (TRUST_E_PROVIDER_UNKNOWN == dwLastError) )
+            {
+                ret = 1;
+            }
+            else
+            {
+                snprintf (retpszRetBuffer, MaxRetBufferSize-1, "An unknown error occurred trying to verify the signature");
+            }
+
+            break;
+
+        case TRUST_E_EXPLICIT_DISTRUST:
+            fprintf (g_fpLog, "The signature is present, but specifically disallowed.\n");
+            snprintf (retpszRetBuffer, MaxRetBufferSize-1, "The signature is present, but specifically disallowed");
+            break;
+
+        case TRUST_E_SUBJECT_NOT_TRUSTED:
+            fprintf (g_fpLog, "The signature is present, but not trusted.\n");
+            snprintf (retpszRetBuffer, MaxRetBufferSize-1, "The signature is present, but not trusted.\n");
+            break;
+
+        case CRYPT_E_SECURITY_SETTINGS:
+            snprintf (retpszRetBuffer, MaxRetBufferSize-1, "Signature is not trusted because of settings");
+            break;
+
+        default:
+            snprintf (retpszRetBuffer, MaxRetBufferSize-1, "Error verifying signature: 0x%x", lStatus);
+            GetWindowsErrorString ("Error verifying signature", MaxRetBufferSize, retpszRetBuffer);
+            break;
+    }
+
+    // Any hWVTStateData must be released by a call with close.
+    WinTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
+
+    lStatus = WinVerifyTrust (NULL, &WVTPolicyGUID, &WinTrustData);
+
+    return ret;
+}
+
+int NshGetRegValue (HKEY hMainKey, char *sub_key, char *value_name, char *data, DWORD data_size)
+{
+    HKEY    hKey   = NULL;
+    DWORD   type   = 0;
+    LONG    ret    = 0;
+    DWORD   number = 0;
+
+    ret = RegOpenKeyEx (HKEY_LOCAL_MACHINE, sub_key, 0, KEY_READ, &hKey);
+
+    if (ERROR_SUCCESS != ret)
+        return 0;
+
+    ret = RegQueryValueExA (hKey, value_name, NULL, &type, (LPBYTE) data, &data_size);
+
+    RegCloseKey(hKey);
+
+    if (ERROR_SUCCESS != ret)
+        return 0;
+
+    switch (type)
+    {
+        case REG_SZ:
+            break;
+
+        case REG_DWORD:
+            number = (DWORD) (*data);
+            snprintf (data, sizeof (data) - 1, "%ld", number);
+            break;
+
+        default:
+            *data = '\0';
+            break;
+    } /* switch */
+
+    return 1;
+}
 
 #endif
 
@@ -179,7 +499,13 @@ int copy_file (const char *pszSourcePath, const char *pszTargetPath, BOOL bOverw
     int ret = 0;
 
     BOOL bFileCopied = FALSE;
-    bFileCopied = CopyFile (pszSourcePath, pszTargetPath, bOverwrite);
+    bFileCopied = CopyFile (pszSourcePath, pszTargetPath, bOverwrite ? FALSE : TRUE);
+
+    if (!bFileCopied)
+    {
+        printf ("Error copying file [%s] -> [%s]\n", pszSourcePath, pszTargetPath);
+        fprintf (g_fpLog, "Error copying file [%s] -> [%s]\n", pszSourcePath, pszTargetPath);
+    }
 
     return ret;
 }
@@ -305,7 +631,10 @@ int GetSoftwareInfoFromFile (TYPE_SOFTWARE_INFO *pInstSoft, const char *pszFileP
             while (*p)
             {
                 if (*p < 32)
+                {
                     *p = '\0';
+                    break;
+                }
                 p++;
             }
 
@@ -342,7 +671,7 @@ int PrintSoftwareInfo (const char *pszFindPath)
     ret = GetSoftwareInfoFromFile (&SoftInfo, pszFindPath);
     if (ret)
         goto Done;
-    
+
     printf ("%s|%s|%s\n", SoftInfo.szName, SoftInfo.szVersion, SoftInfo.szDescription);
 
 Done:
@@ -443,7 +772,7 @@ int  ListInstalledSoftware (const char *pszInstallRegDir)
 
     printf ("\n--- Installed Software ---\n");
 
-    RunCommandOnFileFind (pszInstallRegDir, "install.ini", 2);
+    RunCommandOnFileFind (pszInstallRegDir, g_InstallIniName, 2);
 
     printf ("--- Installed Software ---\n\n");
 
@@ -498,7 +827,53 @@ int help(const char *pszProgramName)
     return 0;
 }
 
-int InstallAddOn (int argc, const char *argv[])
+
+int UninstallFiles (const char *pszFilePath)
+{
+    int  ret = 0;
+    char szBuffer[1024] = {0};
+    char *p  = NULL;
+    FILE *fp = NULL;
+
+    fp = fopen (pszFilePath, "r");
+
+    if (NULL == fp)
+    {
+        printf ("Cannot open: [%s]\n", pszFilePath);
+        ret = 1;
+        goto Done;
+    }
+
+    while ( fgets (szBuffer, sizeof (szBuffer)-1, fp) )
+    {
+        p=szBuffer;
+
+        while (*p)
+        {
+            if (*p < 32)
+            {
+                *p = '\0';
+                break;
+            }
+            p++;
+        }
+
+        delete_file (szBuffer);
+
+    } /* while */
+
+Done:
+
+    if (fp)
+    {
+        fclose (fp);
+        fp = NULL;
+    }
+
+    return ret;
+}
+
+int main (int argc, const char *argv[])
 {
     int ret   = 0;
     int i     = 0;
@@ -520,6 +895,8 @@ int InstallAddOn (int argc, const char *argv[])
     char szDominoBuild[40]         = {0};
     char szName[40]                = {0};
     char szDelay[40]               = {0};
+    char szSignInfoBuffer[1024]    = {0};
+    char szFileToCheck[1024]       = {0};
 
     TYPE_SOFTWARE_INFO NewSoft       = {0};
     TYPE_SOFTWARE_INFO InstalledSoft = {0};
@@ -605,6 +982,9 @@ int InstallAddOn (int argc, const char *argv[])
                 continue;
             }
 
+            if (GetParam (pParam, "-check=", szFileToCheck, sizeof (szFileToCheck)))
+                continue;
+
             if (0 == strcmp (pParam, "-list"))
             {
                 CmdListSoftware = 1;
@@ -664,12 +1044,15 @@ int InstallAddOn (int argc, const char *argv[])
 
 #endif
 
-    if (!*szProgramDir)
+    if (*szFileToCheck)
     {
-        /* LATER: Quick hack for demo */
-        LogError ("Info: No program directory found, using test default!");
-        strdncpy (szProgramDir, "c:\\domino-install-test", sizeof (szProgramDir));
-        // goto Done;
+        ret = VerifyEmbeddedSignature (szFileToCheck, sizeof (szSignInfoBuffer), szSignInfoBuffer);
+        printf ("Installer [%s] Sign status: %d [%s]\n", szFileToCheck, ret, szSignInfoBuffer);
+
+        ret = GetEmbeddedSignature (szFileToCheck, sizeof (szSignInfoBuffer), szSignInfoBuffer);
+        printf ("Sign status: %d [%s]\n", ret, szSignInfoBuffer);
+
+        goto Done;
     }
 
     if (!*szProgramDir)
@@ -681,7 +1064,7 @@ int InstallAddOn (int argc, const char *argv[])
     if (!*szDataDir)
     {
         LogError ("No data directory found");
-        // goto Done;
+        goto Done;
     }
 
     printf ("ProgramDir: [%s]\n", szProgramDir);
@@ -695,7 +1078,7 @@ int InstallAddOn (int argc, const char *argv[])
         goto Done;
     }
 
-    BuildPath (szInstallIniFile, sizeof (szInstallIniFile), szInstallDir, "install.ini");
+    BuildPath (szInstallIniFile, sizeof (szInstallIniFile), szInstallDir, g_InstallIniName);
 
     if (CmdRemoveSoftware)
     {
@@ -714,18 +1097,30 @@ int InstallAddOn (int argc, const char *argv[])
             pName = NewSoft.szName;
         }
 
-        BuildPath (szInstallLogDir, sizeof (szInstallLogDir), szInstallRegDir, pName);
-        BuildPath (szLogInstalledFiles, sizeof (szLogInstalledFiles), szInstallLogDir, "file.log");
-
-        g_fpFileInstallLog = fopen (szLogInstalledFiles, "r");
-
-        if (NULL == g_fpFileInstallLog)
+        if (!*pName)
         {
-            LogError ("Cannot open file log file");
+            LogError ("No software name found!");
             goto Done;
         }
 
-        printf ("Removing [%s] via [%s]\n", pName, szLogInstalledFiles);
+        BuildPath (szInstallLogDir,     sizeof (szInstallLogDir),     szInstallRegDir, pName);
+        BuildPath (szLogInstalledFiles, sizeof (szLogInstalledFiles), szInstallLogDir, g_InstallFileLogName);
+        BuildPath (szInstallIniLog,     sizeof (szInstallIniLog),     szInstallLogDir, g_InstallIniName);
+
+        GetSoftwareInfoFromFile (&InstalledSoft, szInstallIniLog);
+
+        if (!*InstalledSoft.szVersion)
+        {
+            printf ("Cannot find specified software: [%s]\n", pName);
+            goto Done;
+        }
+
+        printf ("Removing %s %s via %s\n", pName, InstalledSoft.szVersion, szLogInstalledFiles);
+
+        /* Remove files via file-log and remove ini + file-log -- keep install history */
+        UninstallFiles (szLogInstalledFiles);
+        delete_file (szInstallIniLog);
+        delete_file (szLogInstalledFiles);
 
         goto Done;
     }
@@ -745,9 +1140,9 @@ int InstallAddOn (int argc, const char *argv[])
     }
 
     BuildPath (szInstallLogDir,     sizeof (szInstallLogDir),     szInstallRegDir, NewSoft.szName);
-    BuildPath (szLogFileName,       sizeof (szLogFileName),       szInstallLogDir, "install.log");
-    BuildPath (szLogInstalledFiles, sizeof (szLogInstalledFiles), szInstallLogDir, "file.log");
-    BuildPath (szInstallIniLog,     sizeof (szInstallIniLog),     szInstallLogDir, "install.ini");
+    BuildPath (szLogFileName,       sizeof (szLogFileName),       szInstallLogDir, g_InstallLogName);
+    BuildPath (szLogInstalledFiles, sizeof (szLogInstalledFiles), szInstallLogDir, g_InstallFileLogName);
+    BuildPath (szInstallIniLog,     sizeof (szInstallIniLog),     szInstallLogDir, g_InstallIniName);
 
     GetSoftwareInfoFromFile (&InstalledSoft, szInstallIniLog);
 
@@ -760,6 +1155,10 @@ int InstallAddOn (int argc, const char *argv[])
     if (*InstalledSoft.szVersion)
     {
         printf ("[%s] Updating %s -> %s\n", InstalledSoft.szName, InstalledSoft.szVersion, NewSoft.szVersion);
+
+        printf ("Removing [%s] via [%s]\n", NewSoft.szName, szLogInstalledFiles);
+        UninstallFiles (szLogInstalledFiles);
+        delete_file (szLogInstalledFiles);
     }
     else
     {
@@ -792,8 +1191,6 @@ int InstallAddOn (int argc, const char *argv[])
     printf ("Install log file: [%s]\n", szLogInstalledFiles);
 
     fprintf (g_fpLog, "-- Command-Line Arguments --\n\n");
-
-    printf ("argc1: %d\n", argc);
 
     for (i=0; i<argc; i++)
     {
@@ -833,13 +1230,13 @@ Done:
         g_fpFileInstallLog = NULL;
     }
 
-    printf ("\nTerminating\n\n");
-
     if (wait)
     {
+        printf ("\nWaiting %ld seconds before termination\n\n", wait);
         Sleep (wait * 1000);
     }
 
+    printf ("Done\n");
     return ret;
 
 Syntax:
@@ -847,20 +1244,3 @@ Syntax:
     return ret;
 }
 
-int main (int argc, const char *argv[])
-{
-    int ret = 0;
-
-    if ((argc < 1) || (NULL == argv[0]))
-        goto Done;
-
-    ret = InstallAddOn (argc, argv);
-
-Done:
-
-    return ret;
-
-Syntax:
-
-    return 1;
-}
