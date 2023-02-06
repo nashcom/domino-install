@@ -62,7 +62,9 @@ char g_InstallRegDirName[]  = ".install-reg";
 char g_InstallLogName[]     = "install.log";
 char g_InstallFileLogName[] = "file.log";
 char g_InstallIniName[]     = "install.ini";
-
+char g_ReleaseStr[]         = "Release ";
+char g_FixPackStr[]         = "FP";
+char g_HotFixStr[]          = "HF";
 
 #ifdef UNIX
 char g_OsDirSep = '/';
@@ -106,6 +108,106 @@ int delete_file (const char *pszFileName)
 Done:
     return ret;
 }
+
+int GetNumberFromStr (const char **ppString)
+{
+    int  num = 0;
+    char c   = 0;
+
+    if (NULL == ppString)
+        goto Done;
+
+    if (NULL == *ppString)
+        goto Done;
+
+    /* Skip leading blanks*/
+    while (' ' == **ppString)
+        (*ppString)++;
+
+    while (**ppString)
+    {
+        c = **ppString;
+
+        if ((c >= '0') && (c <= '9'))
+        {
+            num = (num * 10) + (c - '0');
+        }
+        else if ('.' == c)
+        {
+            (*ppString)++;
+            break;
+        }
+        else
+        {
+            break;
+        }
+
+        (*ppString)++;
+    } /* while */
+
+Done:
+
+    return num;
+}
+
+long DominoBuildNumFromVersion (const char *pszRelease, int *retpHotfix)
+{
+    long lBuild       = 0;
+    int  MajorVersion = 0;
+    int  MinorVersion = 0;
+    int  QMRNumber    = 0;
+    int  QMUNumber    = 0;
+    int  HotfixNumber = 0;
+
+    const char *pszVersion = NULL;
+    const char *p = NULL;
+
+    if (retpHotfix)
+        *retpHotfix = 0;
+
+    if (NULL == pszRelease)
+        goto Done;
+
+    /* Skip "Release " prefix */
+    p = strstr (pszRelease, g_ReleaseStr);
+
+    if (p)
+        pszVersion = p + strlen (g_ReleaseStr);
+    else
+        pszVersion = pszRelease;
+
+    /* Get version in format major.minor.QMR */
+
+    MajorVersion = GetNumberFromStr (&pszVersion);
+    MinorVersion = GetNumberFromStr (&pszVersion);
+    QMRNumber    = GetNumberFromStr (&pszVersion);
+
+    /* Get optional fixpack number */
+    p = strstr (pszVersion, g_FixPackStr);
+    if (p)
+    {
+        pszVersion = p + strlen (g_FixPackStr);
+        QMUNumber = GetNumberFromStr (&pszVersion);
+    }
+
+    /* Get optional hotfix number */
+    p = strstr (pszVersion, g_HotFixStr);
+    if (p)
+    {
+        pszVersion = p + strlen (g_HotFixStr);
+        HotfixNumber = GetNumberFromStr (&pszVersion);
+    }
+
+    lBuild = MajorVersion * 1000000 + MinorVersion * 10000 + QMRNumber * 100 + QMUNumber;
+
+Done:
+
+    if (retpHotfix)
+        *retpHotfix = HotfixNumber;
+
+    return lBuild;
+}
+
 
 #ifdef UNIX
 #else
@@ -452,6 +554,50 @@ int BuildPath (char *retpszCombinedPath, size_t BufferSize, const char *pszDir, 
         return 0;
 
     return snprintf (retpszCombinedPath, BufferSize-1, "%s%c%s", pszDir, g_OsDirSep, pszFile);
+}
+
+int GetDominoVersion (const char *pszBinaryDir, char *retpszVersion, int MaxVersionBuffer)
+{
+    int len = 0;
+    HMODULE hModule = NULL;
+
+    char szNotesLib[1024]    = {0};
+    char szErrorBuffer[1024] = {0};
+
+    if ((NULL == retpszVersion) || (0 == MaxVersionBuffer))
+        goto Done;
+
+    *retpszVersion = '\0';
+
+    snprintf (szNotesLib, sizeof (szNotesLib)-1, "%s%c%s", pszBinaryDir, g_OsDirSep, "nstrings.dll");
+
+    hModule = LoadLibraryEx (szNotesLib, NULL, LOAD_LIBRARY_AS_DATAFILE);
+
+    if (NULL == hModule)
+    {
+        GetWindowsErrorString ("Cannot load module", sizeof (szErrorBuffer)-1, szErrorBuffer);
+        printf ("%s\n", szErrorBuffer);
+        goto Done;
+    }
+
+    len = LoadString (hModule, 1, retpszVersion, MaxVersionBuffer-1);
+
+    if (0 == len)
+    {
+        GetWindowsErrorString ("Cannot load string", sizeof (szErrorBuffer)-1, szErrorBuffer);
+        printf ("%s\n", szErrorBuffer);
+        goto Done;
+    }
+
+Done:
+
+    if (hModule)
+    {
+        FreeLibrary (hModule);
+        hModule = NULL;
+    }
+
+    return len;
 }
 
 #ifdef UNIX
@@ -891,9 +1037,9 @@ int main (int argc, const char *argv[])
     char szInstallIniLog[1024]     = {0};
     char szLogFileName[1024]       = {0};
     char szLogInstalledFiles[1024] = {0};
-    char szDominoVersion[40]       = {0};
-    char szDominoBuild[40]         = {0};
-    char szName[40]                = {0};
+    char szDominoVersion[80]       = {0};
+    char szDominoBuild[80]         = {0};
+    char szName[80]                = {0};
     char szDelay[40]               = {0};
     char szSignInfoBuffer[1024]    = {0};
     char szFileToCheck[1024]       = {0};
@@ -909,6 +1055,9 @@ int main (int argc, const char *argv[])
 
     int CmdListSoftware   = 0;
     int CmdRemoveSoftware = 0;
+
+    long lBuild = 0;
+    int  Hotfix = 0;
 
     strdncpy (szInstallDir, argv[0], sizeof (szInstallDir));
 
@@ -1067,8 +1216,16 @@ int main (int argc, const char *argv[])
         goto Done;
     }
 
+    if (!*szDominoVersion)
+        GetDominoVersion (szProgramDir, szDominoVersion, sizeof (szDominoVersion)-1);
+
+    lBuild = DominoBuildNumFromVersion (szDominoVersion, &Hotfix);
+
     printf ("ProgramDir: [%s]\n", szProgramDir);
     printf ("Data Dir  : [%s]\n", szDataDir);
+    printf ("Version   : [%s]\n", szDominoVersion);
+    printf ("Build     : %ld\n",  lBuild);
+    printf ("Hotfix    : %d\n",   Hotfix);
 
     BuildPath (szInstallRegDir, sizeof (szInstallRegDir), szProgramDir, g_InstallRegDirName);
 
