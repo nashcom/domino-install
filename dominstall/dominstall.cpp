@@ -42,6 +42,23 @@
 #include "dominoinstall.hpp"
 
 
+#ifdef UNIX
+    #define STRICMP strcasecmp
+    #define POPEN    popen
+    #define PCLOSE   pclose
+    #define GETCWD   getcwd
+    #define CHDIR    chdir
+
+#else
+    #define STRICMP _stricmp
+    #define POPEN   _popen
+    #define PCLOSE  _pclose
+    #define GETCWD  _getcwd
+    #define CHDIR   _chdir
+
+#endif
+
+
 typedef struct
 {
     char szName[1024];
@@ -49,6 +66,17 @@ typedef struct
     char szDescription[1024];
     char szVendor[1024];
 } TYPE_SOFTWARE_INFO;
+
+
+typedef struct
+{
+    long lDominoBuild;
+    long lBuildBestMatch;
+    char szBestMatchVersionPath[1024];
+} TYPE_VERSION_CHECK;
+
+
+typedef int (TYPE_CMD_FUNCTION_CALLBACK) (const char *pszFindPath, void *pCustomData);
 
 /* Globals */
 FILE *g_fpLog = NULL;
@@ -63,6 +91,7 @@ char g_InstallLogName[]     = "install.log";
 char g_InstallFileLogName[] = "file.log";
 char g_InstallIniName[]     = "install.ini";
 char g_ReleaseStr[]         = "Release ";
+char g_ReleaseInstallStr[]  = "Release_";
 char g_FixPackStr[]         = "FP";
 char g_HotFixStr[]          = "HF";
 
@@ -86,11 +115,44 @@ void strdncpy (char *s, const char *ct, size_t n)
     }
 }
 
+int IsNullStr (const char *pszStr)
+{
+    if (NULL == pszStr)
+        return 1;
+
+    if ('\0' == *pszStr)
+        return 1;
+
+    return 0;
+}
+
+const char * GetStringPtrAfterPrefix (const char *pszString, const char *pszPrefix)
+{
+    const char *s = pszString;
+    const char *p = pszPrefix;
+
+    if (NULL == pszString)
+        return NULL;
+
+    if (NULL == pszPrefix)
+        return NULL;
+
+    while (*p)
+    {
+        if (*p != *s)
+            return NULL;
+        p++;
+        s++;
+    }
+
+    return s;
+}
+
 int delete_file (const char *pszFileName)
 {
     int ret = 0;
 
-    if (NULL == pszFileName)
+    if (IsNullStr (pszFileName))
         goto Done;
 
 #ifdef UNIX
@@ -117,9 +179,6 @@ int GetNumberFromStr (const char **ppString)
     if (NULL == ppString)
         goto Done;
 
-    if (NULL == *ppString)
-        goto Done;
-
     /* Skip leading blanks*/
     while (' ' == **ppString)
         (*ppString)++;
@@ -134,11 +193,13 @@ int GetNumberFromStr (const char **ppString)
         }
         else if ('.' == c)
         {
+            /* Skip dot for reading next number */
             (*ppString)++;
             break;
         }
         else
         {
+            /* Don't skip char and leave it for the next part of calculation (e.g. FP/HF ) */
             break;
         }
 
@@ -165,15 +226,13 @@ long DominoBuildNumFromVersion (const char *pszRelease, int *retpHotfix)
     if (retpHotfix)
         *retpHotfix = 0;
 
-    if (NULL == pszRelease)
+    if (IsNullStr (pszRelease))
         goto Done;
 
     /* Skip "Release " prefix */
-    p = strstr (pszRelease, g_ReleaseStr);
+    pszVersion = GetStringPtrAfterPrefix (pszRelease, g_ReleaseStr);
 
-    if (p)
-        pszVersion = p + strlen (g_ReleaseStr);
-    else
+    if (IsNullStr (pszVersion))
         pszVersion = pszRelease;
 
     /* Get version in format major.minor.QMR */
@@ -276,8 +335,8 @@ int GetEmbeddedSignature (const char *pszFileName, int MaxRetBufferSize, char *r
 
     CRYPT_VERIFY_MESSAGE_PARA VerifyMsgParam = { 0 };
 
-    WIN_CERTIFICATE CertHeader = {0};
-    WIN_CERTIFICATE *pCert = NULL;
+    WIN_CERTIFICATE CertHeader   = {0};
+    WIN_CERTIFICATE *pCert       = NULL;
     PCCERT_CONTEXT  pCertContext = NULL;
 
     WIN_CERTIFICATE *pCertBuf = NULL;
@@ -287,7 +346,7 @@ int GetEmbeddedSignature (const char *pszFileName, int MaxRetBufferSize, char *r
 
     *retpszRetBuffer = '\0';
 
-    if (NULL == pszFileName)
+    if (IsNullStr (pszFileName))
         return ret;
 
     hFile = CreateFile (pszFileName, FILE_READ_DATA, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, NULL);
@@ -304,7 +363,7 @@ int GetEmbeddedSignature (const char *pszFileName, int MaxRetBufferSize, char *r
         goto Done;
     }
 
-    printf ("Certificates found: %ld\n", dwCertCount);
+    // printf ("Certificates found: %ld\n", dwCertCount);
 
     CertHeader.dwLength = 0;
     CertHeader.wRevision = WIN_CERT_REVISION_1_0;
@@ -403,7 +462,7 @@ int VerifyEmbeddedSignature (const char *pszFileName, int MaxRetBufferSize, char
 
     *retpszRetBuffer = '\0';
 
-    if (NULL == pszFileName)
+    if (IsNullStr (pszFileName))
         return ret;
 
     swprintf (wszSourceFile, sizeof (wszSourceFile)-1, L"%hs", pszFileName);
@@ -606,8 +665,8 @@ int CopyFilesFromDirectory (const char *pszDirectory, const char *pszTargetDir, 
 {
     int ret = 0;
     BOOL bFileCopied = FALSE;
-    DIR *pDir = NULL;
-    struct dirent *pEntry;
+    DIR *pDir        = NULL;
+    struct dirent *pEntry = NULL;
 
     pDir = opendir (pszDirectory);
     if (NULL == pDir)
@@ -809,7 +868,7 @@ Done:
     return ret;
 }
 
-int PrintSoftwareInfo (const char *pszFindPath)
+int PrintSoftwareInfo (const char *pszFindPath, void *pCustomData)
 {
     int ret = 0;
     TYPE_SOFTWARE_INFO SoftInfo = {0};
@@ -824,12 +883,111 @@ Done:
     return ret;
 }
 
-int RunCommandOnFileFind (const char *pszDirectory, const char *pszMatchFileName, int levels)
+int IsExecutable (const char *pszFindPath)
+{
+    const char *pExt = NULL;
+    const char *p    = NULL;
+
+    p = pszFindPath;
+
+    while (*p)
+    {
+        if ('.' == *p)
+            pExt = p+1;
+
+        p++;
+    } /* while */
+
+    if (NULL == pExt)
+        return 0;
+
+    if (0 == STRICMP (pExt, "dll") )
+        return 1;
+
+    if (0 == STRICMP (pExt, "exe") )
+        return 1;
+
+    return 0;
+}
+
+int CheckSignature (const char *pszFindPath, void *pCustomData)
+{
+    int ret = 0;
+    char szSignInfoBuffer[2048] = {0};
+
+    if (IsExecutable (pszFindPath))
+    {
+        ret = VerifyEmbeddedSignature (pszFindPath, sizeof (szSignInfoBuffer), szSignInfoBuffer);
+
+        if (0 == ret)
+        {
+            GetEmbeddedSignature (pszFindPath, sizeof (szSignInfoBuffer), szSignInfoBuffer);
+            printf ("%d|%s|%s\n", ret, szSignInfoBuffer, pszFindPath);
+        }
+        else if (1 == ret)
+        {
+            printf ("%d|-|%s\n", ret, pszFindPath);
+        }
+        else
+        {
+            printf ("%d|-|%s|Signature Error|%s\n", ret, pszFindPath, szSignInfoBuffer);
+        }
+    }
+
+Done:
+    return ret;
+}
+
+int CheckInstallVersion (const char *pszFindPath, void *pCustomData)
+{
+    const char *pszVersion;
+    long  lCheckBuild = 0;
+    TYPE_VERSION_CHECK *pVersionCheck;
+
+    if (NULL == pszFindPath)
+        return 0;
+
+    if (NULL == pCustomData)
+        return 0;
+
+    pszVersion = strstr (pszFindPath, g_ReleaseInstallStr);
+
+    if (NULL == pszVersion)
+        return 0;
+
+    pszVersion += strlen (g_ReleaseInstallStr);
+    pVersionCheck = (TYPE_VERSION_CHECK *) pCustomData;
+
+    lCheckBuild = DominoBuildNumFromVersion (pszVersion, NULL);
+
+    if (0 == lCheckBuild)
+        return 0;
+
+    /* Software is too new for Domino build */
+    if (lCheckBuild > pVersionCheck->lDominoBuild)
+        return 0;
+
+    /* Not better then current match */
+    if (lCheckBuild < pVersionCheck->lBuildBestMatch)
+        return 0;
+
+    pVersionCheck->lBuildBestMatch = lCheckBuild;
+    strdncpy (pVersionCheck->szBestMatchVersionPath, pszFindPath, sizeof (pVersionCheck->szBestMatchVersionPath));
+    return 1;
+}
+
+#define RUN_COMMAND_ON_FIND_FLAG_FILE      1
+#define RUN_COMMAND_ON_FIND_FLAG_DIRECTORY 2
+
+int RunCommandOnFileFind (long lFlags, const char *pszDirectory, const char *pszMatchFileName, TYPE_CMD_FUNCTION_CALLBACK *pCommandCallbackFunction, void *pCustomData, int levels)
 {
     int ret = 0;
     char szFindPath[1024] = {0};
 
     if (levels <= 0)
+        goto Done;
+
+    if (NULL == pszMatchFileName)
         goto Done;
 
     WIN32_FIND_DATA file;
@@ -845,6 +1003,9 @@ int RunCommandOnFileFind (const char *pszDirectory, const char *pszMatchFileName
     if (INVALID_HANDLE_VALUE == hSearch)
         goto Done;
 
+    if (NULL == pCommandCallbackFunction)
+        goto Done;
+
     do
     {
         if (0 == strcmp (file.cFileName, "."))
@@ -857,13 +1018,28 @@ int RunCommandOnFileFind (const char *pszDirectory, const char *pszMatchFileName
 
         if (FILE_ATTRIBUTE_DIRECTORY & file.dwFileAttributes)
         {
-            RunCommandOnFileFind (szFindPath, pszMatchFileName, levels-1);
+            if (RUN_COMMAND_ON_FIND_FLAG_DIRECTORY & lFlags)
+            {
+                pCommandCallbackFunction (szFindPath, pCustomData);
+            }
+
+            RunCommandOnFileFind (lFlags, szFindPath, pszMatchFileName, pCommandCallbackFunction, pCustomData, levels-1);
         }
         else
         {
-            if (0 == strcmp (file.cFileName, pszMatchFileName))
+            if (RUN_COMMAND_ON_FIND_FLAG_FILE & lFlags)
             {
-                PrintSoftwareInfo (szFindPath);
+                if (*pszMatchFileName)
+                {
+                    if (0 == strcmp (file.cFileName, pszMatchFileName))
+                    {
+                        pCommandCallbackFunction (szFindPath, pCustomData);
+                    }
+                }
+                else
+                {
+                    pCommandCallbackFunction (szFindPath, pCustomData);
+                }
             }
         }
 
@@ -882,18 +1058,19 @@ Done:
 
 #endif
 
-int CopyInstallDirectory (const char *pszBaseDir, const char *pszDirectory, const char *pszTargetDir, int levels)
+int CopyInstallDirectory (const char *pszBaseDir, const char *pszDirectory, const char *pszTargetDir, const char *pszTargetSubDir, int levels)
 {
     int ret = 0;
     char szSourcePath[1024]  = {0};
+    char szTargetPath[1024]  = {0};
 
-    if (NULL == pszBaseDir)
+    if (IsNullStr (pszBaseDir))
         goto Done;
 
-    if (NULL == pszDirectory)
+    if (IsNullStr (pszDirectory))
         goto Done;
 
-    if (NULL == pszTargetDir)
+    if (IsNullStr (pszTargetDir))
         goto Done;
 
     if (levels <= 0)
@@ -901,7 +1078,15 @@ int CopyInstallDirectory (const char *pszBaseDir, const char *pszDirectory, cons
 
     BuildPath (szSourcePath, sizeof (szSourcePath), pszBaseDir, pszDirectory);
 
-    ret = CopyFilesFromDirectory (szSourcePath, pszTargetDir, levels);
+    if (IsNullStr (pszTargetSubDir))
+    {
+        ret = CopyFilesFromDirectory (szSourcePath, pszTargetDir, levels);
+    }
+    else
+    {
+        BuildPath (szTargetPath, sizeof (szTargetPath), pszTargetDir, pszTargetSubDir);
+        ret = CopyFilesFromDirectory (szSourcePath, szTargetPath, levels);
+    }
 
 Done:
     return ret;
@@ -918,7 +1103,7 @@ int  ListInstalledSoftware (const char *pszInstallRegDir)
 
     printf ("\n--- Installed Software ---\n");
 
-    RunCommandOnFileFind (pszInstallRegDir, g_InstallIniName, 2);
+    RunCommandOnFileFind (RUN_COMMAND_ON_FIND_FLAG_FILE, pszInstallRegDir, g_InstallIniName, PrintSoftwareInfo, NULL, 2);
 
     printf ("--- Installed Software ---\n\n");
 
@@ -926,16 +1111,15 @@ Done:
     return ret;
 }
 
-
 int GetParam (const char *pParam, const char *pName, char *retpConfig, int MaxParamSize)
 {
     const char *p = pParam;
     const char *n = pName;
 
-    if (NULL == p)
+    if (IsNullStr (p))
         return 0;
 
-    if (NULL == n)
+    if (IsNullStr (n))
         return 0;
 
     if (0 == MaxParamSize)
@@ -1027,6 +1211,7 @@ int main (int argc, const char *argv[])
     int wait  = 0;
 
     char szInstallDir[1024]        = {0};
+    char szInstallVersionDir[1024] = {0};
     char szProgramDir[1024]        = {0};
     char szDataDir[1024]           = {0};
     char szDominoService[1024]     = {0};
@@ -1043,13 +1228,15 @@ int main (int argc, const char *argv[])
     char szDelay[40]               = {0};
     char szSignInfoBuffer[1024]    = {0};
     char szFileToCheck[1024]       = {0};
+    char szCheckSignatureDir[1024] = {0};
 
     TYPE_SOFTWARE_INFO NewSoft       = {0};
     TYPE_SOFTWARE_INFO InstalledSoft = {0};
+    TYPE_VERSION_CHECK VersionCheck  = {0};
 
-    char *p       = NULL;
-    char *pDirSep = NULL;
-    char *pValue  = NULL;
+    char *p            = NULL;
+    char *pDirSep      = NULL;
+    char *pValue       = NULL;
     const char *pParam = NULL;
     const char *pName  = NULL;
 
@@ -1134,6 +1321,9 @@ int main (int argc, const char *argv[])
             if (GetParam (pParam, "-check=", szFileToCheck, sizeof (szFileToCheck)))
                 continue;
 
+            if (GetParam (pParam, "-sigcheck=", szCheckSignatureDir, sizeof (szCheckSignatureDir)))
+                continue;
+
             if (0 == strcmp (pParam, "-list"))
             {
                 CmdListSoftware = 1;
@@ -1201,6 +1391,12 @@ int main (int argc, const char *argv[])
         ret = GetEmbeddedSignature (szFileToCheck, sizeof (szSignInfoBuffer), szSignInfoBuffer);
         printf ("Sign status: %d [%s]\n", ret, szSignInfoBuffer);
 
+        goto Done;
+    }
+
+    if (*szCheckSignatureDir)
+    {
+        RunCommandOnFileFind (RUN_COMMAND_ON_FIND_FLAG_FILE, szCheckSignatureDir, "", CheckSignature, NULL, 10);
         goto Done;
     }
 
@@ -1351,7 +1547,6 @@ int main (int argc, const char *argv[])
 
     for (i=0; i<argc; i++)
     {
-        printf ("%s\n", argv[i]);
         fprintf (g_fpLog, "%s\n", argv[i]);
     }
 
@@ -1363,8 +1558,25 @@ int main (int argc, const char *argv[])
     fprintf (g_fpLog, "NotesIni=%s\n",   szNotesIni);
     fprintf (g_fpLog, "InstallDir=%s\n", szInstallDir);
 
-    CopyInstallDirectory (szInstallDir, "domino-bin", szProgramDir, 10);
-    CopyInstallDirectory (szInstallDir, "domino-data", szDataDir, 10);
+    CopyInstallDirectory (szInstallDir, "domino-bin", szProgramDir, "", 10);
+    CopyInstallDirectory (szInstallDir, "domino-data", szDataDir, "", 10);
+
+    VersionCheck.lDominoBuild = lBuild;
+    VersionCheck.lBuildBestMatch = 0;
+    *VersionCheck.szBestMatchVersionPath = '\0';
+
+    RunCommandOnFileFind (RUN_COMMAND_ON_FIND_FLAG_DIRECTORY, szInstallDir, "", CheckInstallVersion, &VersionCheck, 1);
+
+    /* Check for special version directory to install with format example: Release_12.0.2 */
+    if (VersionCheck.lBuildBestMatch)
+    {
+        strdncpy (szInstallVersionDir, VersionCheck.szBestMatchVersionPath, sizeof (szInstallVersionDir));
+        printf ("InstallDirVersion=%s\n", szInstallVersionDir);
+        fprintf (g_fpLog, "InstallDirVersion=%s\n", szInstallVersionDir);
+
+        CopyInstallDirectory (szInstallVersionDir, "domino-bin", szProgramDir, "", 10);
+        CopyInstallDirectory (szInstallVersionDir, "domino-data", szDataDir, "", 10);
+    }
 
     fprintf (g_fpLog, "FilesCopied=%ld\n",   g_CopiedFiles);
     fprintf (g_fpLog, "FileCopyErrors=%ld\n",g_CopyErrors);

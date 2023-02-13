@@ -26,7 +26,9 @@
 
 #include "cfg.hpp"
 
-int OneTouchAutoConfig (const char * pszJsonTemplate, const char *pszJsonOutput, const char *pszEnvFile, int prompt)
+#define MAX_CFG 1024
+
+int OneTouchAutoConfig (const char *pszJsonTemplate, const char *pszJsonOutput, const char *pszEnvFile, const char *pszProgram, int prompt)
 {
     int ret = 0;
 
@@ -35,11 +37,21 @@ int OneTouchAutoConfig (const char * pszJsonTemplate, const char *pszJsonOutput,
     if (prompt)
         AutoCfg.SetInteractive (1);
 
-    ret = AutoCfg.ReadCfg (pszEnvFile);
-    if (ret)
-       goto Done;
+    if (!IsNullStr (pszEnvFile))
+    {
+        ret = AutoCfg.ReadCfg (pszEnvFile);
+        if (ret)
+            goto Done;
+    }
 
-    ret = AutoCfg.FileUpdatePlaceholders (pszJsonTemplate, pszJsonOutput);
+    if (IsNullStr (pszProgram))
+    {
+        ret = AutoCfg.FileUpdatePlaceholders (pszJsonTemplate, pszJsonOutput);
+    }
+    else
+    {
+        ret = AutoCfg.FileUpdateFromProgram (pszProgram, pszJsonOutput);
+    }
 
     if (ret)
         goto Done;
@@ -48,7 +60,8 @@ int OneTouchAutoConfig (const char * pszJsonTemplate, const char *pszJsonOutput,
     if (ret)
         goto Done;
 
-    printf ("\nCreated [%s] from template [%s]\n\n", pszJsonOutput, pszJsonTemplate);
+    if (*pszJsonOutput)
+        printf ("\nCreated [%s] from template [%s]\n\n", pszJsonOutput, pszJsonTemplate);
 
 Done:
 
@@ -89,10 +102,11 @@ int main (int argc, const char *argv[])
     int count  = 0;
     int prompt = 0;
 
-    const char *pParam = NULL;
-    char szTemplate[255] = {0};
-    char szConfig[255]   = {0};
-    char szEnvFile[255]  = {0};
+    const char *pParam       = NULL;
+    char szTemplate[MAX_CFG] = {0};
+    char szConfig[MAX_CFG]   = {0};
+    char szEnvFile[MAX_CFG]  = {0};
+    char szProgram[MAX_CFG]  = {0};
 
     for (i=1; i<argc; i++)
     {
@@ -101,6 +115,15 @@ int main (int argc, const char *argv[])
         if ('-' == *pParam)
         {
             if (GetParam (pParam, "-env=", szEnvFile, sizeof (szEnvFile)))
+                continue;
+
+            if (GetParam (pParam, "-f=", szTemplate, sizeof (szTemplate)))
+                continue;
+
+            if (GetParam (pParam, "-o=", szConfig, sizeof (szConfig)))
+                continue;
+
+            if (GetParam (pParam, "-p=", szProgram, sizeof (szProgram)))
                 continue;
 
             if (0 == strcmp (pParam, "-prompt"))
@@ -114,7 +137,7 @@ int main (int argc, const char *argv[])
                 goto Syntax;
             }
 
-            printf ("Invalid parameter: [%s]\n", pParam);
+            printf ("Error: Invalid parameter: [%s]\n", pParam);
             goto Syntax;
         }
         else
@@ -129,7 +152,7 @@ int main (int argc, const char *argv[])
             }
             else
             {
-                printf ("Invalid parameter: [%s]\n", pParam);
+                printf ("Error: Invalid parameter: [%s]\n", pParam);
                 goto Syntax;
             }
 
@@ -138,19 +161,13 @@ int main (int argc, const char *argv[])
 
     } /* for */
 
-    if (!*szTemplate)
+    if ( (!*szTemplate) && (!*szProgram) )
     {
-        printf ("\nNo template file specified!\n\n");
+        printf ("\nError: No template file or program specified!\n\n");
         goto Done;
     }
 
-    if (!*szConfig)
-    {
-        printf ("\nNo configuration file specified!\n\n");
-        goto Done;
-    }
-
-    ret = OneTouchAutoConfig (szTemplate, szConfig, szEnvFile, prompt);
+    ret = OneTouchAutoConfig (szTemplate, szConfig, szEnvFile, szProgram, prompt);
 
 Done:
 
@@ -159,7 +176,7 @@ Done:
 Syntax:
 
     if (argc)
-        printf ("\nSyntax: %s <JSON OTS template> <JSON OTS file> [-env=file] [-prompt]\n\n", argv[0]);
+        printf ("\nSyntax: %s [-env=<file>] [-prompt] [-f=<template-file>] [-o=<output-file>] [-p=<popen stdout as input>]\n\n", argv[0]);
     
     return 1;
 }

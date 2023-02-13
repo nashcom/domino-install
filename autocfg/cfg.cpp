@@ -25,6 +25,22 @@
 
 #include "cfg.hpp"
 
+#ifdef UNIX
+    #define STRICMP strcasecmp
+    #define POPEN    popen
+    #define PCLOSE   pclose
+    #define GETCWD   getcwd
+    #define CHDIR    chdir
+
+#else
+    #define STRICMP _stricmp
+    #define POPEN   _popen
+    #define PCLOSE  _pclose
+    #define GETCWD  _getcwd
+    #define CHDIR   _chdir
+
+#endif
+
 #define SERVERSETUP_ENV "SERVERSETUP_"
 
 void strdncpy (char *s, const char *ct, size_t n)
@@ -56,8 +72,9 @@ void AutoConfig::Init()
     m_pCfgArrayHead = NULL;
     m_pCfgArrayNext = NULL;
 
-    mm_CfgEntriesMax = 0;
+    m_CfgEntriesMax = 0;
     m_CfgEntries    = 0;
+    m_Interactive    = 0;
 }
 
 void AutoConfig::Release()
@@ -87,16 +104,16 @@ int AutoConfig::AddEntry (char *pszName, char *pszValue)
     int error = 0;
     CFG_STRUCT * pNewArrayPtr = NULL;
 
-    if (m_CfgEntries >= mm_CfgEntriesMax)
+    if (m_CfgEntries >= m_CfgEntriesMax)
     {
         /* Increase array size and re-allocate memory */
-        mm_CfgEntriesMax += INCREASE_ARRAY_ELEMENTS;
+        m_CfgEntriesMax += INCREASE_ARRAY_ELEMENTS;
 
-        pNewArrayPtr = (CFG_STRUCT *) realloc (m_pCfgArrayHead, mm_CfgEntriesMax * sizeof (CFG_STRUCT));
+        pNewArrayPtr = (CFG_STRUCT *) realloc (m_pCfgArrayHead, m_CfgEntriesMax * sizeof (CFG_STRUCT));
 
         if (NULL == pNewArrayPtr)
         {
-            printf ("\nCannot re-allocate cfg array (%d)\n\n", mm_CfgEntriesMax);
+            printf ("\nError: Cannot re-allocate cfg array (%d)\n\n", m_CfgEntriesMax);
             error = 2;
             goto Done;
         }
@@ -173,17 +190,21 @@ Done:
 int AutoConfig::ReadCfg (const char *pszFileName)
 {
     int error = 0;
-    FILE  *fpInput   = NULL;
+    FILE  *fpInput = NULL;
     char  szBuffer[10240] = {0};
 
     if (IsNullStr (pszFileName))
+    {
+        printf ("\nError: No environment file specified\n\n");
+        error = 1;
         goto Done;
+    }
 
     fpInput = fopen (pszFileName, "r");
 
     if (NULL == fpInput)
     {
-        printf ("\nError opening [%s]\n\n", pszFileName);
+        printf ("\nError: Cannot open config file: [%s]\n\n", pszFileName);
         error = 1;
         goto Done;
     }
@@ -191,12 +212,12 @@ int AutoConfig::ReadCfg (const char *pszFileName)
     /* Just in case if called more than once, release the previous memory */
     Release();
 
-    mm_CfgEntriesMax = INITAL_ARRAY_ELEMENTS;
-    m_pCfgArrayHead = (CFG_STRUCT *) malloc (mm_CfgEntriesMax * sizeof (CFG_STRUCT));
+    m_CfgEntriesMax = INITAL_ARRAY_ELEMENTS;
+    m_pCfgArrayHead = (CFG_STRUCT *) malloc (m_CfgEntriesMax * sizeof (CFG_STRUCT));
 
     if (NULL == m_pCfgArrayHead)
     {
-        printf ("\nCannot allocate cfg array (%d)\n\n", mm_CfgEntriesMax);
+        printf ("\nError: Cannot allocate cfg array (%d)\n\n", m_CfgEntriesMax);
         error = 2;
         goto Done;
     }
@@ -298,7 +319,7 @@ int AutoConfig::CheckWriteBuffer (char *pszBuffer, FILE *fpOutput)
             p += strlen (SERVERSETUP_ENV);
         }
 
-        printf ("%s: ", p);
+        fprintf (stderr, "%s: ", p);
 
         *szLine='\0';
 
@@ -321,7 +342,7 @@ int AutoConfig::CheckWriteBuffer (char *pszBuffer, FILE *fpOutput)
     }
     else
     {
-        printf ("Info: [%s] not found\n", pEnv);
+        // printf ("Info: [%s] not found\n", pEnv);
         ret = 1;
     }
 
@@ -347,37 +368,59 @@ int AutoConfig::FileUpdatePlaceholders (const char *pszInputFile, const char *ps
     int   count      = 0;
     FILE  *fpInput   = NULL;
     FILE  *fpOutput  = NULL;
+    FILE  *fpIn      = NULL;
+    FILE  *fpOut     = NULL;
 
     char  szBuffer[10240] = {0};
 
-    fpInput = fopen (pszInputFile, "r");
-
-    if (NULL == fpInput)
+    if ( (IsNullStr (pszInputFile)) || (0 == strcmp (pszInputFile, "-")) )
     {
-        printf ("\nError opening [%s]\n\n", pszInputFile);
+        fpIn = stdin;
+    }
+    else
+    {
+        fpInput = fopen (pszInputFile, "r");
+        fpIn = fpInput;
+    }
+
+    if (NULL == fpIn)
+    {
+        printf ("\nError: Cannot open input file: [%s]\n\n", pszInputFile);
         error = 1;
         goto Done;
     }
 
-    fpOutput = fopen (pszOutputFile, "w");
-
-    if (NULL == fpOutput)
+    if (IsNullStr (pszOutputFile))
     {
-        printf ("\nError opening [%s]\n\n", pszOutputFile);
+        fpOut = stdout;
+    }
+    else
+    {
+        fpOutput = fopen (pszOutputFile, "w");
+        fpOut = fpOutput;
+    }
+
+    if (NULL == fpOut)
+    {
+        printf ("\nError: Cannot open output file: [%s]\n\n", pszOutputFile);
         error = 2;
         goto Done;
     }
 
-    while ( fgets (szBuffer, sizeof (szBuffer)-1, fpInput) )
+    while ( fgets (szBuffer, sizeof (szBuffer)-1, fpIn) )
     {
-        ret = CheckWriteBuffer (szBuffer, fpOutput);
+        ret = CheckWriteBuffer (szBuffer, fpOut);
 
         if (ret)
             count++;
     }
 
     if (count)
-        printf ("\nWarning: %d placeholders with empty values!\n\n", count);
+    {
+        if (!IsNullStr (pszOutputFile))
+            printf ("\nWarning: %d placeholders with empty values!\n\n", count);
+    }
+
 Done:
 
     if (fpInput)
@@ -395,3 +438,70 @@ Done:
     return error;
 }
 
+int AutoConfig::FileUpdateFromProgram (const char *pszProgram, const char *pszOutputFile)
+{
+    int   error      = 0;
+    int   ret        = 0;
+    int   count      = 0;
+    FILE  *fpInput   = NULL;
+    FILE  *fpOutput  = NULL;
+    FILE  *fpOut     = NULL;
+
+    char  szBuffer[10240] = {0};
+
+    fpInput = POPEN (pszProgram, "r");
+
+    if (NULL == fpInput)
+    {
+        printf ("\nError: Cannot open process: [%s]\n\n", pszProgram);
+        error = 2;
+        goto Done;
+    }
+
+    if (IsNullStr (pszOutputFile))
+    {
+        fpOut = stdout;
+    }
+    else
+    {
+        fpOutput = fopen (pszOutputFile, "w");
+        fpOut = fpOutput;
+    }
+
+    if (NULL == fpOut)
+    {
+        printf ("\nError:  Cannot output file: [%s]\n\n", pszOutputFile);
+        error = 2;
+        goto Done;
+    }
+
+    while ( fgets (szBuffer, sizeof (szBuffer)-1, fpInput) )
+    {
+        ret = CheckWriteBuffer (szBuffer, fpOut);
+
+        if (ret)
+            count++;
+    }
+
+    if (count)
+    {
+        if (!IsNullStr (pszOutputFile))
+            printf ("\nWarning: %d placeholders with empty values!\n\n", count);
+    }
+
+Done:
+
+    if (fpInput)
+    {
+        PCLOSE (fpInput);
+        fpInput = NULL;
+    }
+
+    if (fpOutput)
+    {
+        fclose (fpOutput);
+        fpOutput = NULL;
+    }
+
+    return error;
+}

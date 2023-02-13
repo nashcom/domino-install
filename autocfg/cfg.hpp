@@ -44,13 +44,13 @@
 
 #endif
 
-
 typedef struct {
     char szName[MAX_ENTRY_LEN+1];
     char szValue[MAX_ENTRY_LEN+1];
 } CFG_STRUCT;
 
 
+int IsNullStr (const char *pszStr);
 
 class AutoConfig
 {
@@ -65,6 +65,7 @@ public:
 
     int  CheckCfgBuffer         (char *pszBuffer);
     int  FileUpdatePlaceholders (const char *pszInputFile, const char *pszOutputFile);
+    int  FileUpdateFromProgram  (const char *pszProgram, const char *pszOutputFile);
     int  CheckWriteBuffer       (char *pszBuffer, FILE *fpOutput);
     int  ReadCfg                (const char *pszFileName);
     char *CheckCfgArray         (const char *pszName);
@@ -81,7 +82,7 @@ private:
     CFG_STRUCT *m_pCfgArrayHead;
     CFG_STRUCT *m_pCfgArrayNext;
 
-    int mm_CfgEntriesMax;
+    int m_CfgEntriesMax;
     int m_CfgEntries;
     int m_Interactive;
 };
