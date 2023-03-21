@@ -27,10 +27,10 @@ autocfg: autocfg.o cfg.o
 	$(CC) autocfg.o cfg.o -o bin/linux64/$@
 
 cfg.o: cfg.cpp
-	$(CC) $(CFLAGS) -DLINUX -DUNIX cfg.cpp
+	$(CC) $(CFLAGS) cfg.cpp
 
 autocfg.o: autocfg.cpp
-	$(CC) $(CFLAGS) -DLINUX -DUNIX autocfg.cpp
+	$(CC) $(CFLAGS) autocfg.cpp
 
 
 clean:

@@ -27,22 +27,24 @@
 #define INITAL_ARRAY_ELEMENTS   50
 #define INCREASE_ARRAY_ELEMENTS 10
 
+#ifdef _WIN32
 
-#ifdef UNIX
-    #define STRICMP strcasecmp
-    #define POPEN    popen
-    #define PCLOSE   pclose
-    #define GETCWD   getcwd
-    #define CHDIR    chdir
-
-#else
     #define STRICMP _stricmp
     #define POPEN   _popen
     #define PCLOSE  _pclose
     #define GETCWD  _getcwd
     #define CHDIR   _chdir
 
+#else
+
+    #define STRICMP strcasecmp
+    #define POPEN    popen
+    #define PCLOSE   pclose
+    #define GETCWD   getcwd
+    #define CHDIR    chdir
+
 #endif
+
 
 typedef struct {
     char szName[MAX_ENTRY_LEN+1];

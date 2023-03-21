@@ -19,27 +19,10 @@
 */
 
 #include <stdlib.h>
-#include <malloc.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "cfg.hpp"
-
-#ifdef UNIX
-    #define STRICMP strcasecmp
-    #define POPEN    popen
-    #define PCLOSE   pclose
-    #define GETCWD   getcwd
-    #define CHDIR    chdir
-
-#else
-    #define STRICMP _stricmp
-    #define POPEN   _popen
-    #define PCLOSE  _pclose
-    #define GETCWD  _getcwd
-    #define CHDIR   _chdir
-
-#endif
 
 #define SERVERSETUP_ENV "SERVERSETUP_"
 
