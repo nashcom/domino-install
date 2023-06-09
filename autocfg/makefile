@@ -1,6 +1,5 @@
 ###########################################################################
 # Domino Auto Config (OneTouchConfig Tool)                                #
-# Version 0.1 02.02.2023                                                  #
 # (C) Copyright Daniel Nashed/NashCom 2023                                #
 #                                                                         #
 # Licensed under the Apache License, Version 2.0 (the "License");         #
@@ -17,14 +16,14 @@
 ###########################################################################
 
 CC=g++
-CFLAGS= -g -Wall -c -m64 -fPIC -fpermissive -Wno-write-strings 
+CFLAGS= -g -Wall -c -fPIC -fpermissive -Wno-write-strings
 
 PROGRAM=autocfg
 
 all: autocfg
 
 autocfg: autocfg.o cfg.o
-	$(CC) autocfg.o cfg.o -o bin/linux64/$@
+	$(CC) autocfg.o cfg.o -o $@
 
 cfg.o: cfg.cpp
 	$(CC) $(CFLAGS) cfg.cpp
@@ -32,9 +31,8 @@ cfg.o: cfg.cpp
 autocfg.o: autocfg.cpp
 	$(CC) $(CFLAGS) autocfg.cpp
 
-
 clean:
-	rm -f  *.o bin/linux64/autocfg
+	rm -f  *.o autocfg
 
 test: all
 	./$(PROGRAM)
