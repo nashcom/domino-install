@@ -1,7 +1,7 @@
 /*
 ###########################################################################
 # Domino Auto Config (OneTouchConfig Tool)                                #
-# Version 0.1 02.02.2023                                                  #
+# Version 0.2.0 09.06.2023                                                #
 # (C) Copyright Daniel Nashed/NashCom 2023                                #
 #                                                                         #
 # Licensed under the Apache License, Version 2.0 (the "License");         #
@@ -15,6 +15,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.#
 # See the License for the specific language governing permissions and     #
 # limitations under the License.                                          #
+#                                                                         #
+#  Changes                                                                #
+#  -------                                                                #
+#                                                                         #
+#  V0.2.0 09.06.2023                                                      #
+#                                                                         #
+#   - Support for standard .env file                                      #
+#   - Log all infos to stderr instead of stdout                           #
+#                                                                         #
+#                                                                         #
 ###########################################################################
 */
 
@@ -23,12 +33,25 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "cfg.hpp"
 
+#define VERSION "0.2.0"
+
 #define MAX_CFG 1024
 
-int OneTouchAutoConfig (const char *pszJsonTemplate, const char *pszJsonOutput, const char *pszEnvFile, const char *pszProgram, int prompt)
+int file_exists (const char *pszFilename)
+{
+    struct stat buffer = {0};
+
+    if (IsNullStr (pszFilename))
+        return 0;
+
+    return (0 == stat (pszFilename, &buffer));
+}
+
+int RunAutoConfig (const char *pszJsonTemplate, const char *pszJsonOutput, const char *pszEnvFile, const char *pszProgram, int prompt)
 {
     int ret = 0;
 
@@ -61,7 +84,7 @@ int OneTouchAutoConfig (const char *pszJsonTemplate, const char *pszJsonOutput, 
         goto Done;
 
     if (*pszJsonOutput)
-        printf ("\nCreated [%s] from template [%s]\n\n", pszJsonOutput, pszJsonTemplate);
+        fprintf (stderr, "\nCreated [%s] from template [%s]\n\n", pszJsonOutput, pszJsonTemplate);
 
 Done:
 
@@ -112,6 +135,7 @@ int main (int argc, const char *argv[])
     {
         pParam = argv[i];
 
+
         if ('-' == *pParam)
         {
             if (GetParam (pParam, "-env=", szEnvFile, sizeof (szEnvFile)))
@@ -132,12 +156,18 @@ int main (int argc, const char *argv[])
                 continue;
             }
 
+            if (0 == strcmp (pParam, "-version") || (0 == strcmp (pParam, "--version")) )
+            {
+                printf ("%s\n", VERSION);
+                goto Done;
+            }
+
             if (0 == strcmp (pParam, "-help") || (0 == strcmp (pParam, "-?")) )
             {
                 goto Syntax;
             }
 
-            printf ("Error: Invalid parameter: [%s]\n", pParam);
+            fprintf (stderr, "Error: Invalid parameter: [%s]\n", pParam);
             goto Syntax;
         }
         else
@@ -152,7 +182,7 @@ int main (int argc, const char *argv[])
             }
             else
             {
-                printf ("Error: Invalid parameter: [%s]\n", pParam);
+                fprintf (stderr, "Error: Invalid parameter: [%s]\n", pParam);
                 goto Syntax;
             }
 
@@ -163,11 +193,21 @@ int main (int argc, const char *argv[])
 
     if ( (!*szTemplate) && (!*szProgram) )
     {
-        printf ("\nError: No template file or program specified!\n\n");
+        fprintf (stderr, "\nError: No template file or program specified!\n\n");
         goto Done;
     }
 
-    ret = OneTouchAutoConfig (szTemplate, szConfig, szEnvFile, szProgram, prompt);
+    /* Check if default .env file is present and use it (like docker-compose does) */
+    if ( '\0' == *szEnvFile)
+    {
+       if (file_exists (".env"))
+       {
+            snprintf (szEnvFile, sizeof (szEnvFile)-1, ".env");
+            fprintf (stderr, "Info: Using standard .env file\n");
+       }
+    }
+
+    ret = RunAutoConfig (szTemplate, szConfig, szEnvFile, szProgram, prompt);
 
 Done:
 
@@ -176,7 +216,7 @@ Done:
 Syntax:
 
     if (argc)
-        printf ("\nSyntax: %s [-env=<file>] [-prompt] [-f=<template-file>] [-o=<output-file>] [-p=<popen stdout as input>]\n\n", argv[0]);
+        fprintf (stderr, "\nSyntax: %s [-env=<file>] [-prompt] [-f=<template-file>] [-o=<output-file>] [-p=<popen stdout as input>]\n\n", argv[0]);
     
     return 1;
 }
